@@ -11,79 +11,78 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Monument Crates", "naumenkoff", "0.3.9")]
+    [Info("Monument Crates", "naumenkoff", "0.4.0")]
     internal class MonumentCrates : RustPlugin
     {
         private const string BlurInGameMenu = "assets/content/ui/uibackgroundblur-ingamemenu.mat";
         private readonly List<string> _messages = new List<string>();
         private Configuration _configuration;
+        private DynamicConfigFile _dynamicConfigFile;
         private bool _isMenuShown;
         private bool _isTimerEnabled;
-        private DynamicConfigFile _physicalStorage;
+        private List<LootCrate> _lootCrates = new List<LootCrate>();
         private Timer _timer;
-        private List<LootCrates> _virtualStorage = new List<LootCrates>();
 
         #region Methods
 
-        private int KillLootContainers(string arg)
+        private int KillLootContainers(string shortPrefabName)
         {
-            var containers = GetLootContainers().Where(x => x.ShortPrefabName == arg).ToList();
-            var killedCrates = KillLootContainers(containers);
-            UpdateLootContainersButtons();
-            return killedCrates;
+            var suitable = GetLootContainers().Where(x => x.ShortPrefabName == shortPrefabName).ToList();
+            var killed = KillLootContainers(suitable);
+            return killed;
         }
 
         private int KillLootContainers()
         {
-            var destroyedContainers = KillLootContainers(GetLootContainers());
-            NextTick(UpdateLootContainersButtons);
-            return destroyedContainers;
+            var killed = KillLootContainers(GetLootContainers());
+            return killed;
         }
 
-        private static int KillLootContainers(List<LootContainer> cratesCollection)
+        private int KillLootContainers(List<LootContainer> lootContainers)
         {
-            var destroyed = 0;
-            foreach (var lootContainer in cratesCollection)
+            var killed = 0;
+            foreach (var lootContainer in lootContainers)
             {
                 lootContainer.Kill();
-                destroyed++;
+                killed++;
             }
 
-            return destroyed;
+            NextTick(UpdateLootContainersButtons);
+            return killed;
         }
 
         private int SpawnLootContainers()
         {
-            var counter = 0;
-            foreach (var lootCrate in _virtualStorage)
+            var spawned = 0;
+            foreach (var lootCrate in _lootCrates)
             {
-                var entity = GameManager.server.CreateEntity(lootCrate.PrefabName, lootCrate.ServerPosition,
-                    lootCrate.ServerRotation);
-                entity.Spawn();
-                counter++;
+                var lootContainerEntity = GameManager.server.CreateEntity(lootCrate.PrefabName,
+                    lootCrate.ServerPosition, lootCrate.ServerRotation);
+                lootContainerEntity.Spawn();
+                spawned++;
             }
 
             NextTick(UpdateLootContainersButtons);
-            return counter;
+            return spawned;
         }
 
         private void UpdateLootContainersButtons()
         {
             var lootContainers = GetLootContainers();
 
-            var names = new List<string>();
-            foreach (var container in lootContainers)
+            var lootContainersNames = new List<string>();
+            foreach (var lootContainer in lootContainers)
             {
-                if (names.Contains(container.ShortPrefabName) ||
-                    container.ShortPrefabName.Contains("roadsign"))
+                if (lootContainersNames.Contains(lootContainer.ShortPrefabName) ||
+                    lootContainer.ShortPrefabName.Contains("roadsign"))
                     continue;
 
-                names.Add(container.ShortPrefabName);
+                lootContainersNames.Add(lootContainer.ShortPrefabName);
             }
 
-            var buttons = GetLootContainerButtons(names);
-            foreach (var player in BasePlayer.activePlayerList.Where(x => x.IsAdmin))
-                DrawLootContainersTypes(player, buttons);
+            var buttons = GetLootContainerButtons(lootContainersNames);
+            foreach (var admin in BasePlayer.activePlayerList.Where(x => x.IsAdmin))
+                DrawLootContainersTypes(admin, buttons);
         }
 
         private static List<LootContainer> GetLootContainers()
@@ -95,84 +94,79 @@ namespace Oxide.Plugins
         private void UpdateListOfLootContainers()
         {
             var containerTypes = new List<string>();
-            foreach (var entity in GetLootContainers())
+            foreach (var lootContainer in GetLootContainers())
             {
-                if (_configuration.WhitelistedContainers.Contains(entity.ShortPrefabName) == false) continue;
+                if (_configuration.WhitelistedContainers.Contains(lootContainer.ShortPrefabName) == false) continue;
 
-                var lootCrate = new LootCrates(entity);
-                if (_virtualStorage.Any(x =>
+                var lootCrate = new LootCrate(lootContainer);
+                if (_lootCrates.Any(x =>
                         x.ServerPosition == lootCrate.ServerPosition && x.PrefabName == lootCrate.PrefabName))
                     continue;
 
-                _virtualStorage.Add(lootCrate);
+                _lootCrates.Add(lootCrate);
 
                 if (containerTypes.Contains(lootCrate.PrefabName)) continue;
                 containerTypes.Add(lootCrate.PrefabName);
             }
 
-            UpdateLootContainersButtons();
+            NextTick(UpdateLootContainersButtons);
 
             foreach (var admin in BasePlayer.activePlayerList.Where(x => x.IsAdmin))
-                ConsoleOutput(admin, $"Added {containerTypes.Count} kinds of LootContainers.");
+                DrawMessage(admin, $"Added {containerTypes.Count} kinds of LootContainers.");
         }
 
         #endregion
 
         #region User Interface
 
-        private int GetCrateCount(string name)
+        private int GetNumberOfLootContainers(string prefabName)
         {
-            return _virtualStorage?.Count(x => x.PrefabName == name) ?? 0;
+            return _lootCrates?.Count(x => x.PrefabName == prefabName) ?? 0;
         }
 
-        private void DrawUIButton(BasePlayer player, bool isMenuActive)
+        private void DrawUIShowHideButton(BasePlayer player, bool isMenuActive)
         {
             DestroyUI(player);
             _isMenuShown = isMenuActive;
-            var menu = new CuiElementContainer
+            var cuiElementContainer = new CuiElementContainer();
+            cuiElementContainer.Add(new CuiButton
             {
+                RectTransform =
                 {
-                    new CuiButton
-                    {
-                        RectTransform =
-                        {
-                            AnchorMin = "0.9 0.96", AnchorMax = "1 1"
-                        },
-                        Button =
-                        {
-                            Sprite = "assets/content/textures/generic/fulltransparent.tga",
-                            Color = "0 0 0 0",
-                            Command = isMenuActive
-                                ? _commandList[nameof(HideUserInterfaceCommand)]
-                                : _commandList[nameof(ShowUserInterfaceCommand)]
-                        },
-                        Text =
-                        {
-                            Text = isMenuActive ? "Hide menu" : "Show menu", Align = TextAnchor.MiddleCenter,
-                            FontSize = 12, Color = GetColor("#edededff")
-                        }
-                    },
-                    "Overlay", UILayers.OpenManagerButton
+                    AnchorMin = "0.9 0.96", AnchorMax = "1 1"
+                },
+                Button =
+                {
+                    Sprite = "assets/content/textures/generic/fulltransparent.tga",
+                    Color = "0 0 0 0",
+                    Command = isMenuActive
+                        ? _commandList[nameof(HideUserInterfaceCommand)]
+                        : _commandList[nameof(ShowUserInterfaceCommand)]
+                },
+                Text =
+                {
+                    Text = isMenuActive ? "Hide menu" : "Show menu", Align = TextAnchor.MiddleCenter,
+                    FontSize = 12, Color = GetColor("#edededff")
                 }
-            };
-            CuiHelper.AddUi(player, menu);
+            }, "Overlay", UILayers.OpenManagerButton);
+            CuiHelper.AddUi(player, cuiElementContainer);
         }
 
         private void DrawUI(BasePlayer player, bool isActive)
         {
             DestroyUI(player);
-            DrawUIButton(player, isActive);
+            DrawUIShowHideButton(player, isActive);
             _isMenuShown = isActive;
             if (!isActive) return;
             DrawPluginSettings(player);
             DrawJsonManagement(player);
             DrawLootContainerManagement(player);
-            UpdateLootContainersButtons();
-            ConsoleOutput(player, string.Empty);
+            NextTick(UpdateLootContainersButtons);
+            DrawMessage(player, string.Empty);
             DrawCratesCount(player);
         }
 
-        private CuiPanel CreatePanel(string anchorMin, string anchorMax)
+        private static CuiPanel CreatePanel(string anchorMin, string anchorMax)
         {
             return new CuiPanel
             {
@@ -205,114 +199,103 @@ namespace Oxide.Plugins
             };
         }
 
-        private void DrawPluginSettings(BasePlayer player)
+        private static CuiElement CreateElement(string parent, string text, string anchorMin, string anchorMax)
         {
-            CuiHelper.DestroyUi(player, UILayers.PluginSection);
-            if (!_isMenuShown) return;
-            var cui = new CuiElementContainer();
-            cui.Add(CreatePanel("0.04 0.25", "0.24 0.75"), "Overlay", UILayers.PluginSection);
-            cui.Add(new CuiElement
+            return new CuiElement
             {
-                Parent = UILayers.PluginSection,
+                Parent = parent,
                 Components =
                 {
                     new CuiTextComponent
                     {
                         Align = TextAnchor.MiddleCenter, Color = "1 1 1 1", FontSize = 15,
-                        Text = "Plugin Settings"
+                        Text = text
                     },
-                    new CuiRectTransformComponent { AnchorMin = "0 0.8", AnchorMax = "1 1" }
+                    new CuiRectTransformComponent { AnchorMin = anchorMin, AnchorMax = anchorMax }
                 }
-            });
-            cui.Add(
-                CreateButton(_commandList[nameof(ClearConsoleCommand)], "0.1 0.45", "0.9 0.6",
-                    "Clear the Console"), UILayers.PluginSection);
-            cui.Add(
+            };
+        }
+
+        private static CuiLabel CreateLabel(string text, string anchorMin, string anchorMax)
+        {
+            return new CuiLabel
+            {
+                Text =
+                {
+                    Text = text,
+                    Align = TextAnchor.MiddleCenter, FontSize = 8,
+                    Color = "1 1 1 1"
+                },
+                RectTransform = { AnchorMin = anchorMin, AnchorMax = anchorMax }
+            };
+        }
+
+        private void DrawPluginSettings(BasePlayer player)
+        {
+            CuiHelper.DestroyUi(player, UILayers.PluginSection);
+            if (!_isMenuShown) return;
+            var cuiElementContainer = new CuiElementContainer();
+            cuiElementContainer.Add(CreatePanel("0.04 0.25", "0.24 0.75"), "Overlay", UILayers.PluginSection);
+            cuiElementContainer.Add(CreateElement(UILayers.PluginSection, "Plugin Settings", "0 0.8", "1 1"));
+            cuiElementContainer.Add(
+                CreateButton(_commandList[nameof(ClearConsoleCommand)], "0.1 0.45", "0.9 0.6", "Clear the Console"),
+                UILayers.PluginSection);
+            cuiElementContainer.Add(
                 CreateButton(
                     _isTimerEnabled
                         ? _commandList[nameof(DisableTimerCommand)]
                         : _commandList[nameof(EnableTimerCommand)], "0.1 0.65", "0.9 0.8",
                     _isTimerEnabled ? "Disable Timer" : "Enable Timer"), UILayers.PluginSection);
-            CuiHelper.AddUi(player, cui);
+            CuiHelper.AddUi(player, cuiElementContainer);
         }
 
         private void DrawJsonManagement(BasePlayer player)
         {
             CuiHelper.DestroyUi(player, UILayers.JsonSection);
             if (!_isMenuShown) return;
-            var cui = new CuiElementContainer();
-            cui.Add(CreatePanel("0.28 0.25", "0.48 0.75"), "Overlay", UILayers.JsonSection);
-            cui.Add(new CuiElement
-            {
-                Parent = UILayers.JsonSection,
-                Components =
-                {
-                    new CuiTextComponent
-                    {
-                        Align = TextAnchor.MiddleCenter, Color = "1 1 1 1", FontSize = 15,
-                        Text = "Json Management"
-                    },
-                    new CuiRectTransformComponent { AnchorMin = "0 0.8", AnchorMax = "1 1" }
-                }
-            });
-            cui.Add(
+            var cuiElementContainer = new CuiElementContainer();
+            cuiElementContainer.Add(CreatePanel("0.28 0.25", "0.48 0.75"), "Overlay", UILayers.JsonSection);
+            cuiElementContainer.Add(CreateElement(UILayers.JsonSection, "Json Management", "0 0.8", "1 1"));
+            cuiElementContainer.Add(
                 CreateButton(
                     _configuration.Autosave
                         ? _commandList[nameof(DisableAutosaveCommand)]
                         : _commandList[nameof(EnableAutosaveCommand)], "0.1 0.68", "0.9 0.8",
                     _configuration.Autosave ? "Disable Autosave" : "Enable Autosave"), UILayers.JsonSection);
-            cui.Add(
+            cuiElementContainer.Add(
                 CreateButton(_commandList[nameof(SaveLootContainersCommand)], "0.1 0.36", "0.9 0.48",
                     "Save LootContainers"), UILayers.JsonSection);
-
-            cui.Add(
+            cuiElementContainer.Add(
                 CreateButton(_commandList[nameof(ClearLootContainersCommand)], "0.1 0.52", "0.9 0.64",
                     "Clear LootContainers"), UILayers.JsonSection);
-            CuiHelper.AddUi(player, cui);
+            CuiHelper.AddUi(player, cuiElementContainer);
         }
 
         private void DrawLootContainerManagement(BasePlayer player)
         {
             CuiHelper.DestroyUi(player, UILayers.ManagerSection);
             if (!_isMenuShown) return;
-            var cui = new CuiElementContainer();
-            cui.Add(CreatePanel("0.76 0.25", "0.96 0.75"), "Overlay", UILayers.ManagerSection);
-            cui.Add(new CuiElement
-            {
-                Parent = UILayers.ManagerSection,
-                Components =
-                {
-                    new CuiTextComponent
-                    {
-                        Align = TextAnchor.MiddleCenter, Color = "1 1 1 1", FontSize = 15,
-                        Text = "LootContainer Management"
-                    },
-                    new CuiRectTransformComponent { AnchorMin = "0 0.8", AnchorMax = "1 1" }
-                }
-            });
-            cui.Add(
+            var cuiElementContainer = new CuiElementContainer();
+            cuiElementContainer.Add(CreatePanel("0.76 0.25", "0.96 0.75"), "Overlay", UILayers.ManagerSection);
+            cuiElementContainer.Add(CreateElement(UILayers.ManagerSection, "LootContainer Management", "0 0.8", "1 1"));
+            cuiElementContainer.Add(
                 CreateButton(_commandList[nameof(KillLootContainersCommand)], "0.1 0.52", "0.9 0.64",
                     "Kill LootContainers"), UILayers.ManagerSection);
-            cui.Add(
+            cuiElementContainer.Add(
                 CreateButton(_commandList[nameof(SpawnLootContainersCommand)], "0.1 0.68", "0.9 0.8",
                     "Spawn LootContainers"), UILayers.ManagerSection);
-            CuiHelper.AddUi(player, cui);
+            CuiHelper.AddUi(player, cuiElementContainer);
         }
 
         private void DrawLootContainersTypes(BasePlayer player, List<CuiButton> buttons)
         {
             CuiHelper.DestroyUi(player, UILayers.LootContainersInformation);
             if (!_isMenuShown) return;
-            var hud = new CuiElementContainer
-            {
-                {
-                    CreatePanel("0.52 0.25", "0.72 0.75"),
-                    "Overlay", UILayers.LootContainersInformation
-                }
-            };
-
-            foreach (var button in buttons) hud.Add(button, UILayers.LootContainersInformation);
-            CuiHelper.AddUi(player, hud);
+            var cuiElementContainer = new CuiElementContainer();
+            cuiElementContainer.Add(CreatePanel("0.52 0.25", "0.72 0.75"), "Overlay",
+                UILayers.LootContainersInformation);
+            foreach (var button in buttons) cuiElementContainer.Add(button, UILayers.LootContainersInformation);
+            CuiHelper.AddUi(player, cuiElementContainer);
         }
 
         private List<CuiButton> GetLootContainerButtons(IReadOnlyList<string> names)
@@ -365,104 +348,56 @@ namespace Oxide.Plugins
         {
             CuiHelper.DestroyUi(player, UILayers.ContainersInformation);
             if (!_isMenuShown) return;
-
-            var sb = new StringBuilder();
-            sb.Append(
-                $"<color=lime>Military</color> {GetCrateCount("assets/bundled/prefabs/radtown/crate_normal.prefab")} | ");
-            sb.Append($"Crate {GetCrateCount("assets/bundled/prefabs/radtown/crate_normal_2.prefab")} | ");
-            sb.Append(
-                $"<color=yellow>Primitive</color> {GetCrateCount("assets/bundled/prefabs/radtown/crate_basic.prefab")} | ");
-            sb.Append($"Ration {GetCrateCount("assets/bundled/prefabs/radtown/foodbox.prefab")} | ");
-            sb.Append(
-                $"<color=cyan>Vehicle</color> {GetCrateCount("assets/bundled/prefabs/radtown/vehicle_parts.prefab")} | ");
-            sb.Append($"Elite {GetCrateCount("assets/bundled/prefabs/radtown/crate_elite.prefab")}");
-
-            var hud = new CuiElementContainer
+            var stringBuilder = new StringBuilder();
+            stringBuilder.Append(
+                $"<color=lime>Military</color> {GetNumberOfLootContainers("assets/bundled/prefabs/radtown/crate_normal.prefab")} | ");
+            stringBuilder.Append(
+                $"Crate {GetNumberOfLootContainers("assets/bundled/prefabs/radtown/crate_normal_2.prefab")} | ");
+            stringBuilder.Append(
+                $"<color=yellow>Primitive</color> {GetNumberOfLootContainers("assets/bundled/prefabs/radtown/crate_basic.prefab")} | ");
+            stringBuilder.Append(
+                $"Ration {GetNumberOfLootContainers("assets/bundled/prefabs/radtown/foodbox.prefab")} | ");
+            stringBuilder.Append(
+                $"<color=cyan>Vehicle</color> {GetNumberOfLootContainers("assets/bundled/prefabs/radtown/vehicle_parts.prefab")} | ");
+            stringBuilder.Append(
+                $"Elite {GetNumberOfLootContainers("assets/bundled/prefabs/radtown/crate_elite.prefab")}");
+            var cuiElementContainer = new CuiElementContainer();
+            cuiElementContainer.Add(CreatePanel("0.52 0.16", "0.96 0.24"), "Overlay", UILayers.ContainersInformation);
+            cuiElementContainer.Add(new CuiLabel
             {
+                Text =
                 {
-                    CreatePanel("0.52 0.16", "0.96 0.24"),
-                    "Overlay", UILayers.ContainersInformation
+                    Text = stringBuilder.ToString(),
+                    Align = TextAnchor.MiddleCenter, FontSize = 12,
+                    Color = "1 1 1 1"
                 },
-                {
-                    new CuiLabel
-                    {
-                        Text =
-                        {
-                            Text = sb.ToString(),
-                            Align = TextAnchor.MiddleCenter, FontSize = 12,
-                            Color = "1 1 1 1"
-                        },
-                        RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1" }
-                    },
-                    UILayers.ContainersInformation
-                }
-            };
-            CuiHelper.AddUi(player, hud);
+                RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1" }
+            }, UILayers.ContainersInformation);
+            CuiHelper.AddUi(player, cuiElementContainer);
         }
 
-        private string GetColumnMessages(int start, int end)
+        private string GetColumnMessages(int startIndex, int endIndex)
         {
             var message = string.Empty;
-            for (var i = start; i < end; i++) message += GetMessage(_messages.Count - i) + "\n";
+            for (var i = startIndex; i < endIndex; i++) message += GetMessageAt(_messages.Count - i) + "\n";
 
             return message;
         }
 
-        private void ConsoleOutput(BasePlayer player, string text)
+        private void DrawMessage(BasePlayer player, string text)
         {
             CuiHelper.DestroyUi(player, UILayers.PluginConsole);
             if (!string.IsNullOrEmpty(text)) _messages.Add(text);
             if (!_isMenuShown) return;
             if (_messages.Count > 18) _messages.RemoveRange(0, _messages.Count - 18);
-
-            var hud = new CuiElementContainer
-            {
-                {
-                    CreatePanel("0.04 0.16", "0.48 0.24"),
-                    "Overlay", UILayers.PluginConsole
-                },
-                {
-                    new CuiLabel
-                    {
-                        Text =
-                        {
-                            Text = GetColumnMessages(0, 6),
-                            Align = TextAnchor.MiddleCenter, FontSize = 8,
-                            Color = "1 1 1 1"
-                        },
-                        RectTransform = { AnchorMin = "0 0", AnchorMax = "0.3 1" }
-                    },
-                    UILayers.PluginConsole
-                },
-                // 0.307
-                {
-                    new CuiLabel
-                    {
-                        Text =
-                        {
-                            Text = GetColumnMessages(6, 12),
-                            Align = TextAnchor.MiddleCenter, FontSize = 8,
-                            Color = "1 1 1 1"
-                        },
-                        RectTransform = { AnchorMin = $"{1f / 3f} 0", AnchorMax = "0.6 1" }
-                    },
-                    UILayers.PluginConsole
-                },
-                {
-                    new CuiLabel
-                    {
-                        Text =
-                        {
-                            Text = GetColumnMessages(12, 18),
-                            Align = TextAnchor.MiddleCenter, FontSize = 8,
-                            Color = "1 1 1 1"
-                        },
-                        RectTransform = { AnchorMin = $"{2f / 3f} 0", AnchorMax = "1 1" }
-                    },
-                    UILayers.PluginConsole
-                }
-            };
-            CuiHelper.AddUi(player, hud);
+            var cuiElementContainer = new CuiElementContainer();
+            cuiElementContainer.Add(CreatePanel("0.04 0.16", "0.48 0.24"), "Overlay", UILayers.PluginConsole);
+            cuiElementContainer.Add(CreateLabel(GetColumnMessages(0, 6), "0 0", "0.3 1"), UILayers.PluginConsole);
+            cuiElementContainer.Add(CreateLabel(GetColumnMessages(6, 12), $"{1f / 3f} 0", "0.6 1"),
+                UILayers.PluginConsole);
+            cuiElementContainer.Add(CreateLabel(GetColumnMessages(12, 18), $"{2f / 3f} 0", "1 1"),
+                UILayers.PluginConsole);
+            CuiHelper.AddUi(player, cuiElementContainer);
         }
 
         private static void DestroyUI(BasePlayer player)
@@ -470,7 +405,7 @@ namespace Oxide.Plugins
             foreach (var layer in UILayers.Layers) CuiHelper.DestroyUi(player, layer);
         }
 
-        private string GetMessage(int index)
+        private string GetMessageAt(int index)
         {
             return index > 0 && _messages.Count >= index ? _messages[index - 1] : string.Empty;
         }
@@ -480,7 +415,7 @@ namespace Oxide.Plugins
             return byte.Parse(str.Substring(startIndex, length), NumberStyles.HexNumber);
         }
 
-        private string GetColor(string hex)
+        private static string GetColor(string hex)
         {
             if (string.IsNullOrEmpty(hex)) hex = "#FFFFFFFF";
             var str = hex.Trim('#');
@@ -518,23 +453,23 @@ namespace Oxide.Plugins
 
         private void SaveData()
         {
-            _physicalStorage.Settings = new JsonSerializerSettings
+            _dynamicConfigFile.Settings = new JsonSerializerSettings
                 { ReferenceLoopHandling = ReferenceLoopHandling.Ignore };
-            _physicalStorage.WriteObject(_virtualStorage);
+            _dynamicConfigFile.WriteObject(_lootCrates);
         }
 
         private void LoadData()
         {
-            _physicalStorage.Settings = new JsonSerializerSettings
+            _dynamicConfigFile.Settings = new JsonSerializerSettings
                 { ReferenceLoopHandling = ReferenceLoopHandling.Ignore };
-            _virtualStorage =
-                Interface.Oxide.DataFileSystem.ReadObject<List<LootCrates>>(
-                    $"MonumentCrates&{World.Seed}&{World.Size}") ?? new List<LootCrates>();
+            _lootCrates =
+                Interface.Oxide.DataFileSystem.ReadObject<List<LootCrate>>(
+                    $"MonumentCrates&{World.Seed}&{World.Size}") ?? new List<LootCrate>();
         }
 
-        private class LootCrates
+        private class LootCrate
         {
-            public LootCrates(BaseEntity lootContainer)
+            public LootCrate(BaseEntity lootContainer)
             {
                 ServerPosition = lootContainer.ServerPosition;
                 ServerRotation = lootContainer.ServerRotation;
@@ -542,7 +477,7 @@ namespace Oxide.Plugins
             }
 
             [JsonConstructor]
-            public LootCrates(string prefabName, Vector3 serverPosition, Quaternion serverRotation)
+            public LootCrate(string prefabName, Vector3 serverPosition, Quaternion serverRotation)
             {
                 PrefabName = prefabName;
                 ServerPosition = serverPosition;
@@ -620,18 +555,9 @@ namespace Oxide.Plugins
 
         #region Oxide Events
 
-        private void Loaded()
-        {
-            _physicalStorage = Interface.Oxide.DataFileSystem.GetFile($"MonumentCrates&{World.Seed}&{World.Size}");
-            LoadData();
-            timer.Every(_configuration.LootContainersListUpdateDelay, UpdateListOfLootContainers);
-            foreach (var player in BasePlayer.activePlayerList.Where(player => player.IsAdmin))
-                OnPlayerConnected(player);
-        }
-
         private void OnPlayerConnected(BasePlayer player)
         {
-            DrawUIButton(player, false);
+            DrawUIShowHideButton(player, false);
             timer.Every(_configuration.LootContainersUIRefreshDelay, () => { DrawCratesCount(player); });
         }
 
@@ -641,9 +567,14 @@ namespace Oxide.Plugins
             foreach (var player in BasePlayer.activePlayerList) DestroyUI(player);
         }
 
-        private void Init()
+        private void OnServerInitialized()
         {
+            _dynamicConfigFile = Interface.Oxide.DataFileSystem.GetFile($"MonumentCrates&{World.Seed}&{World.Size}");
+            LoadData();
             foreach (var command in _commandList) AddCovalenceCommand(command.Value, command.Key);
+            timer.Every(_configuration.LootContainersListUpdateDelay, UpdateListOfLootContainers);
+            foreach (var player in BasePlayer.activePlayerList.Where(player => player.IsAdmin))
+                OnPlayerConnected(player);
         }
 
         #endregion
@@ -686,10 +617,10 @@ namespace Oxide.Plugins
             _timer = timer.Every(_configuration.LootContainersKillingDelay, () =>
             {
                 var destroyedContainers = KillLootContainers(GetLootContainers());
-                ConsoleOutput(player, $"Killed {destroyedContainers} LootContainers");
+                DrawMessage(player, $"Killed {destroyedContainers} LootContainers");
             });
 
-            ConsoleOutput(player, "Timer <color=lime>started</color>");
+            DrawMessage(player, "Timer <color=lime>started</color>");
             DrawPluginSettings(player);
         }
 
@@ -697,10 +628,8 @@ namespace Oxide.Plugins
         {
             var player = (BasePlayer)caller.Object;
             _isTimerEnabled = false;
-
             timer.Destroy(ref _timer);
-
-            ConsoleOutput(player, "Timer <color=red>stopped</color>");
+            DrawMessage(player, "Timer <color=red>stopped</color>");
             DrawPluginSettings(player);
         }
 
@@ -708,7 +637,7 @@ namespace Oxide.Plugins
         {
             var player = (BasePlayer)caller.Object;
             _messages.Clear();
-            ConsoleOutput(player, null);
+            DrawMessage(player, null);
         }
 
         private void EnableAutosaveCommand(IPlayer caller)
@@ -716,7 +645,7 @@ namespace Oxide.Plugins
             var player = (BasePlayer)caller.Object;
             _configuration.Autosave = true;
             SaveConfig();
-            ConsoleOutput(player, "Automatic LootContainer saving <color=lime>enabled</color>");
+            DrawMessage(player, "Automatic LootContainer saving <color=lime>enabled</color>");
             DrawJsonManagement(player);
         }
 
@@ -725,46 +654,47 @@ namespace Oxide.Plugins
             var player = (BasePlayer)caller.Object;
             _configuration.Autosave = false;
             SaveConfig();
-            ConsoleOutput(player, "Automatic LootContainer saving <color=red>disabled</color>");
+            DrawMessage(player, "Automatic LootContainer saving <color=red>disabled</color>");
             DrawJsonManagement(player);
         }
 
         private void ClearLootContainersCommand(IPlayer caller)
         {
             var player = (BasePlayer)caller.Object;
-            _virtualStorage.Clear();
-            ConsoleOutput(player, "The LootContainers list has been cleared");
+            _lootCrates.Clear();
+            DrawMessage(player, "The LootContainers list has been cleared");
         }
 
         private void SaveLootContainersCommand(IPlayer caller)
         {
             var player = (BasePlayer)caller.Object;
             SaveData();
-            ConsoleOutput(player, "LootContainers were successfully saved to a json file");
+            DrawMessage(player, "LootContainers were successfully saved to a json file");
         }
 
         private void KillLootContainerCommand(IPlayer caller, string command, string[] args)
         {
-            var player = (BasePlayer)caller.Object;
             var arg = args[0];
             if (string.IsNullOrEmpty(arg)) return;
+
+            var player = (BasePlayer)caller.Object;
             var killed = KillLootContainers(arg);
             DrawLootContainerManagement(player);
-            ConsoleOutput(player, $"Killed {killed} {arg} LootContainers");
+            DrawMessage(player, $"Killed {killed} {arg} LootContainers");
         }
 
         private void SpawnLootContainersCommand(IPlayer caller)
         {
             var player = (BasePlayer)caller.Object;
             var spawned = SpawnLootContainers();
-            ConsoleOutput(player, $"Spawned {spawned} LootContainers");
+            DrawMessage(player, $"Spawned {spawned} LootContainers");
         }
 
         private void KillLootContainersCommand(IPlayer caller)
         {
             var player = (BasePlayer)caller.Object;
-            var number = KillLootContainers();
-            ConsoleOutput(player, $"Killed {number} LootContainers");
+            var killed = KillLootContainers();
+            DrawMessage(player, $"Killed {killed} LootContainers");
         }
 
         #endregion
