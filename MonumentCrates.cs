@@ -11,7 +11,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Monument Crates", "naumenkoff", "0.4.0")]
+    [Info("Monument Crates", "naumenkoff", "0.4.1")]
     internal class MonumentCrates : RustPlugin
     {
         private const string BlurInGameMenu = "assets/content/ui/uibackgroundblur-ingamemenu.mat";
@@ -85,24 +85,45 @@ namespace Oxide.Plugins
                 DrawLootContainersTypes(admin, buttons);
         }
 
+        private static BufferList<BaseNetworkable> GetServerEntities()
+        {
+            return BaseNetworkable.serverEntities.entityList.Values;
+        }
+
         private static List<LootContainer> GetLootContainers()
         {
-            var serverEntities = BaseNetworkable.serverEntities.entityList.Values;
-            return serverEntities.OfType<LootContainer>().ToList();
+            return GetServerEntities().OfType<LootContainer>().ToList();
+        }
+
+        private static List<JunkPile> GetJunkPiles()
+        {
+            return GetServerEntities().OfType<JunkPile>().ToList();
+        }
+
+        private bool HasLootContainerAddedAlready(LootContainer lootContainer)
+        {
+            return _lootCrates.Any(x =>
+                x.ServerPosition == lootContainer.ServerPosition && x.PrefabName == lootContainer.PrefabName);
+        }
+
+        private bool IsThereJunkPileNearby(List<JunkPile> junkPiles, LootContainer lootContainer, int radius = 5)
+        {
+            return junkPiles.Any(junkPile =>
+                Vector3.Distance(junkPile.transform.position, lootContainer.transform.position) <= radius);
         }
 
         private void UpdateListOfLootContainers()
         {
+            var lootContainers = GetLootContainers();
+            var junkPiles = GetJunkPiles();
             var containerTypes = new List<string>();
-            foreach (var lootContainer in GetLootContainers())
+            foreach (var lootContainer in lootContainers)
             {
                 if (_configuration.WhitelistedContainers.Contains(lootContainer.ShortPrefabName) == false) continue;
+                if (HasLootContainerAddedAlready(lootContainer)) continue;
+                if (IsThereJunkPileNearby(junkPiles, lootContainer)) continue;
 
                 var lootCrate = new LootCrate(lootContainer);
-                if (_lootCrates.Any(x =>
-                        x.ServerPosition == lootCrate.ServerPosition && x.PrefabName == lootCrate.PrefabName))
-                    continue;
-
                 _lootCrates.Add(lootCrate);
 
                 if (containerTypes.Contains(lootCrate.PrefabName)) continue;
