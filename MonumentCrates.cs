@@ -11,20 +11,22 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Monument Crates", "naumenkoff", "0.4.1")]
+    [Info("Monument Crates", "naumenkoff", "0.4.2")]
     internal class MonumentCrates : RustPlugin
     {
-        private const string BlurInGameMenu = "assets/content/ui/uibackgroundblur-ingamemenu.mat";
         private readonly List<string> _messages = new List<string>();
         private Configuration _configuration;
         private DynamicConfigFile _dynamicConfigFile;
         private bool _isMenuShown;
-        private bool _isTimerEnabled;
         private List<LootCrate> _lootCrates = new List<LootCrate>();
         private Timer _timer;
 
         #region Methods
 
+        /// <summary>
+        ///     This method is used to kill all the LootContainers that match the specified short prefab name.
+        /// </summary>
+        /// <returns>The number of killed LootContainers.</returns>
         private int KillLootContainers(string shortPrefabName)
         {
             var suitable = GetLootContainers().Where(x => x.ShortPrefabName == shortPrefabName).ToList();
@@ -32,12 +34,21 @@ namespace Oxide.Plugins
             return killed;
         }
 
+        /// <summary>
+        ///     This method is used to kill all the LootContainers on the map.
+        /// </summary>
+        /// <returns>The number of killed LootContainers.</returns>
         private int KillLootContainers()
         {
             var killed = KillLootContainers(GetLootContainers());
             return killed;
         }
 
+        /// <summary>
+        ///     This method is used to kill a list of LootContainers.
+        /// </summary>
+        /// <param name="lootContainers">A list of LootContainer objects that will be killed.</param>
+        /// <returns>The number of killed LootContainers.</returns>
         private int KillLootContainers(List<LootContainer> lootContainers)
         {
             var killed = 0;
@@ -51,13 +62,26 @@ namespace Oxide.Plugins
             return killed;
         }
 
+        /// <summary>
+        ///     This method creates a new BaseEntity of a given LootCrate prefab name, at the specified position and rotation.
+        /// </summary>
+        /// <param name="lootCrate">A LootCrate object that defines the prefab name, position and rotation of the LootContainer.</param>
+        /// <returns>The created BaseEntity object.</returns>
+        private static BaseEntity CreateLootContainerEntity(LootCrate lootCrate)
+        {
+            return GameManager.server.CreateEntity(lootCrate.PrefabName,
+                lootCrate.ServerPosition, lootCrate.ServerRotation);
+        }
+
+        /// <summary>
+        ///     This method spawns all the LootContainers specified in the _lootCrates collection.
+        /// </summary>
+        /// <returns>The number of spawned LootContainers.</returns>
         private int SpawnLootContainers()
         {
             var spawned = 0;
-            foreach (var lootCrate in _lootCrates)
+            foreach (var lootContainerEntity in _lootCrates.Select(CreateLootContainerEntity))
             {
-                var lootContainerEntity = GameManager.server.CreateEntity(lootCrate.PrefabName,
-                    lootCrate.ServerPosition, lootCrate.ServerRotation);
                 lootContainerEntity.Spawn();
                 spawned++;
             }
@@ -66,57 +90,96 @@ namespace Oxide.Plugins
             return spawned;
         }
 
+        /// <summary>
+        ///     This method checks whether to skip the specified LootContainer based on its short prefab name and a collection of
+        ///     short names of existing loot containers.
+        /// </summary>
+        /// <param name="lootContainer">The LootContainer to check.</param>
+        /// <param name="lootContainerNames">A collection of short names of existing loot containers.</param>
+        /// <returns>true if the LootContainer should be skipped, false otherwise.</returns>
+        private static bool ShouldSkipLootContainer(BaseNetworkable lootContainer,
+            ICollection<string> lootContainerNames)
+        {
+            return lootContainerNames.Contains(lootContainer.ShortPrefabName) ||
+                   lootContainer.ShortPrefabName.Contains("roadsign");
+        }
+
+        /// <summary>
+        ///     This method updates the LootContainer buttons for all active admin players.
+        /// </summary>
         private void UpdateLootContainersButtons()
         {
             var lootContainers = GetLootContainers();
-
             var lootContainersNames = new List<string>();
-            foreach (var lootContainer in lootContainers)
-            {
-                if (lootContainersNames.Contains(lootContainer.ShortPrefabName) ||
-                    lootContainer.ShortPrefabName.Contains("roadsign"))
-                    continue;
-
+            foreach (var lootContainer in lootContainers.Where(lootContainer =>
+                         ShouldSkipLootContainer(lootContainer, lootContainersNames) == false))
                 lootContainersNames.Add(lootContainer.ShortPrefabName);
-            }
 
             var buttons = GetLootContainerButtons(lootContainersNames);
             foreach (var admin in BasePlayer.activePlayerList.Where(x => x.IsAdmin))
                 DrawLootContainersTypes(admin, buttons);
         }
 
+        /// <summary>
+        ///     Returns a list of all networkable entities currently present on the server.
+        /// </summary>
+        /// <returns>A BufferList of BaseNetworkable objects.</returns>
         private static BufferList<BaseNetworkable> GetServerEntities()
         {
             return BaseNetworkable.serverEntities.entityList.Values;
         }
 
+        /// <summary>
+        ///     Returns a list of all LootContainer objects currently present on the server.
+        /// </summary>
+        /// <returns>A List of LootContainer objects.</returns>
         private static List<LootContainer> GetLootContainers()
         {
             return GetServerEntities().OfType<LootContainer>().ToList();
         }
 
+        /// <summary>
+        ///     Returns a list of all JunkPile objects currently present on the server.
+        /// </summary>
+        /// <returns>A List of JunkPile objects.</returns>
         private static List<JunkPile> GetJunkPiles()
         {
             return GetServerEntities().OfType<JunkPile>().ToList();
         }
 
-        private bool HasLootContainerAddedAlready(LootContainer lootContainer)
+        /// <summary>
+        ///     Checks if a given LootContainer has already been added to the _lootCrates list.
+        /// </summary>
+        /// <param name="lootContainer">The LootContainer to check.</param>
+        /// <returns>True if the LootContainer has already been added, false otherwise.</returns>
+        private bool HasLootContainerAddedAlready(BaseEntity lootContainer)
         {
             return _lootCrates.Any(x =>
                 x.ServerPosition == lootContainer.ServerPosition && x.PrefabName == lootContainer.PrefabName);
         }
 
-        private bool IsThereJunkPileNearby(List<JunkPile> junkPiles, LootContainer lootContainer, int radius = 5)
+
+        /// <summary>
+        ///     Checks if there is a JunkPile object within a specified radius of a given loot container.
+        /// </summary>
+        /// <param name="junkPiles">The list of JunkPile objects to check against.</param>
+        /// <param name="lootContainer">The LootContainer to check.</param>
+        /// <param name="radius">The radius within which to check for JunkPile objects (default is 5).</param>
+        /// <returns>True if there is a JunkPile object nearby, false otherwise.</returns>
+        private static bool IsThereJunkPileNearby(List<JunkPile> junkPiles, BaseEntity lootContainer, int radius = 5)
         {
-            return junkPiles.Any(junkPile =>
-                Vector3.Distance(junkPile.transform.position, lootContainer.transform.position) <= radius);
+            return junkPiles.Any(junkPile => junkPile.Distance(lootContainer) <= radius);
         }
 
+        /// <summary>
+        ///     Updates the _lootCrates list by adding any new loot containers that meet the specified conditions.
+        /// </summary>
         private void UpdateListOfLootContainers()
         {
             var lootContainers = GetLootContainers();
             var junkPiles = GetJunkPiles();
             var containerTypes = new List<string>();
+            var newContainers = 0;
             foreach (var lootContainer in lootContainers)
             {
                 if (_configuration.WhitelistedContainers.Contains(lootContainer.ShortPrefabName) == false) continue;
@@ -126,6 +189,8 @@ namespace Oxide.Plugins
                 var lootCrate = new LootCrate(lootContainer);
                 _lootCrates.Add(lootCrate);
 
+                newContainers++;
+
                 if (containerTypes.Contains(lootCrate.PrefabName)) continue;
                 containerTypes.Add(lootCrate.PrefabName);
             }
@@ -133,7 +198,7 @@ namespace Oxide.Plugins
             NextTick(UpdateLootContainersButtons);
 
             foreach (var admin in BasePlayer.activePlayerList.Where(x => x.IsAdmin))
-                DrawMessage(admin, $"Added {containerTypes.Count} kinds of LootContainers.");
+                DrawMessage(admin, $"Added {newContainers} new LootContainers of {containerTypes.Count} types.");
         }
 
         #endregion
@@ -193,7 +258,7 @@ namespace Oxide.Plugins
             {
                 Image =
                 {
-                    Material = BlurInGameMenu,
+                    Material = "assets/content/ui/uibackgroundblur-ingamemenu.mat",
                     Color = GetColor("00000075")
                 },
                 RectTransform = { AnchorMin = anchorMin, AnchorMax = anchorMax },
@@ -261,12 +326,13 @@ namespace Oxide.Plugins
             cuiElementContainer.Add(
                 CreateButton(_commandList[nameof(ClearConsoleCommand)], "0.1 0.45", "0.9 0.6", "Clear the Console"),
                 UILayers.PluginSection);
+            var isTimerDestroyed = _timer == null || _timer.Destroyed;
             cuiElementContainer.Add(
                 CreateButton(
-                    _isTimerEnabled
-                        ? _commandList[nameof(DisableTimerCommand)]
-                        : _commandList[nameof(EnableTimerCommand)], "0.1 0.65", "0.9 0.8",
-                    _isTimerEnabled ? "Disable Timer" : "Enable Timer"), UILayers.PluginSection);
+                    isTimerDestroyed
+                        ? _commandList[nameof(EnableTimerCommand)]
+                        : _commandList[nameof(DisableTimerCommand)], "0.1 0.65", "0.9 0.8",
+                    isTimerDestroyed ? "Enable Timer" : "Disable Timer"), UILayers.PluginSection);
             CuiHelper.AddUi(player, cuiElementContainer);
         }
 
@@ -319,6 +385,11 @@ namespace Oxide.Plugins
             CuiHelper.AddUi(player, cuiElementContainer);
         }
 
+        /// <summary>
+        ///     Returns a list of CuiButton objects representing LootContainer buttons.
+        /// </summary>
+        /// <param name="names">A list of LootContainer names to be used for button text and command arguments.</param>
+        /// <returns>A list of CuiButton objects representing LootContainer buttons.</returns>
         private List<CuiButton> GetLootContainerButtons(IReadOnlyList<string> names)
         {
             var buttons = new List<CuiButton>();
@@ -401,7 +472,6 @@ namespace Oxide.Plugins
         {
             var message = string.Empty;
             for (var i = startIndex; i < endIndex; i++) message += GetMessageAt(_messages.Count - i) + "\n";
-
             return message;
         }
 
@@ -633,7 +703,6 @@ namespace Oxide.Plugins
         private void EnableTimerCommand(IPlayer caller)
         {
             var player = (BasePlayer)caller.Object;
-            _isTimerEnabled = true;
 
             _timer = timer.Every(_configuration.LootContainersKillingDelay, () =>
             {
@@ -648,7 +717,6 @@ namespace Oxide.Plugins
         private void DisableTimerCommand(IPlayer caller)
         {
             var player = (BasePlayer)caller.Object;
-            _isTimerEnabled = false;
             timer.Destroy(ref _timer);
             DrawMessage(player, "Timer <color=red>stopped</color>");
             DrawPluginSettings(player);
